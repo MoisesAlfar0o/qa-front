@@ -64,7 +64,9 @@ Esta demo no está diseñada para exponerse a Internet: no incorpora autenticaci
 
 La IA ofrece una propuesta, no una garantía. No se ejecuta código generado por el modelo: el backend valida el JSON, resuelve las referencias observadas y genera Gherkin con pasos del catálogo. Una persona revisa y aprueba cada versión antes de ejecutarla. Esta aplicación local no incorpora autenticación de usuarios; no la expongas a una red no confiable.
 
-prompt: 
+prompt:
+Actúa como arquitecto de software. Un desarrollador anterior dejó este proyecto a medias. Tu única tarea en esta sesión es explorar el repositorio, leer el package.json, revisar las carpetas y crear un archivo estado_proyecto.md. Detalla qué partes del frontend existen y si ya hay código funcional para Ollama, Playwright, Gherkin o persistencia. Regla estricta: No escribas código nuevo, no ejecutes instalaciones y no modifiques archivos existentes. Solo mapea la realidad actual tomando en cuenta este objetivo: [Pega aquí SÓLO las secciones "1. Objetivo general" y "2. Principios arquitectónicos obligatorios" de tu documento maestro]
+
 # PROMPT MAESTRO: PLATAFORMA UNIVERSAL DE AUTOMATIZACIÓN E2E CON IA, OLLAMA, PLAYWRIGHT MCP, GHERKIN Y CUCUMBER.JS
 
 ## 1. Objetivo general
