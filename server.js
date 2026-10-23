@@ -3,115 +3,24 @@ import { spawn } from 'node:child_process';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { executePlan, generatePlan, validateLocalUrl, validatePlan } from './planner-service.js';
+import { createApiRouter } from './platform/api.ts';
+import { createPlatform } from './platform/services.ts';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const resultsDir = path.join(root, 'test-results');
 const historyFile = path.join(resultsDir, 'runs.json');
 const latestReport = path.join(resultsDir, 'latest.json');
 const app = express();
-const port = 3001;
+const port = Number(process.env.PORT ?? 3001);
 let isRunning = false;
-const plannerRuns = new Map();
 
-app.use(express.json({ limit: '30kb' }));
+const platform = createPlatform(process.env);
+const recovered = await platform.runs.recover();
+if (recovered.length) console.log(`Ejecuciones marcadas como INTERRUPTED tras el reinicio: ${recovered.join(', ')}`);
+
 app.use('/report', express.static(path.join(root, 'playwright-report')));
-
-function publicPlannerRun(run) {
-  return {
-    id: run.id,
-    status: run.status,
-    activeStep: run.activeStep,
-    steps: run.steps,
-    logs: run.logs,
-    screenshot: run.screenshot,
-    currentUrl: run.currentUrl,
-    finishedAt: run.finishedAt,
-  };
-}
-
-app.get('/api/planner/status', async (_request, response) => {
-  const base = process.env.OLLAMA_URL ?? 'http://127.0.0.1:11434';
-  const model = process.env.OLLAMA_MODEL ?? 'qwen2.5:3b';
-  try {
-    const origin = validateLocalUrl(base).origin;
-    const result = await fetch(`${origin}/api/tags`, { signal: AbortSignal.timeout(1500) });
-    if (!result.ok) {
-      response.json({ connected: false, model, message: `Ollama respondió ${result.status}.` });
-      return;
-    }
-    const data = await result.json();
-    const models = (data.models ?? []).map((item) => item.name);
-    response.json({ connected: true, model, modelAvailable: models.some((name) => name === model || name.startsWith(`${model}:`)), models });
-  } catch {
-    response.json({ connected: false, model });
-  }
-});
-
-app.post('/api/planner/plan', async (request, response) => {
-  try {
-    const { story, targetUrl } = request.body ?? {};
-    const plan = await generatePlan(story, targetUrl);
-    response.json(plan);
-  } catch (error) {
-    response.status(400).json({ error: error.message });
-  }
-});
-
-app.post('/api/planner/runs', (request, response) => {
-  try {
-    const { targetUrl } = request.body ?? {};
-    validateLocalUrl(targetUrl);
-    const steps = validatePlan({ steps: request.body?.steps });
-    if ([...plannerRuns.values()].some((run) => run.status === 'running')) {
-      response.status(409).json({ error: 'Ya hay una ejecución del planner en curso.' });
-      return;
-    }
-
-    const run = {
-      id: `${Date.now()}`,
-      status: 'running',
-      activeStep: -1,
-      steps: [
-        { action: 'navigate', locatorType: 'text', locator: targetUrl, value: '', status: 'pending' },
-        ...steps.map((step) => ({ ...step, status: 'pending' })),
-      ],
-      logs: [],
-      screenshot: '',
-      currentUrl: '',
-      cancelRequested: false,
-    };
-    plannerRuns.set(run.id, run);
-    response.status(202).json({ run: publicPlannerRun(run) });
-    executePlan(run, targetUrl, steps).catch((error) => {
-      run.status = 'failed';
-      run.finishedAt = new Date().toISOString();
-      run.logs.push({ type: 'error', text: error.message, at: run.finishedAt });
-      console.error('Falló la ejecución del planner:', error);
-    });
-  } catch (error) {
-    response.status(400).json({ error: error.message });
-  }
-});
-
-app.get('/api/planner/runs/:id', (request, response) => {
-  const run = plannerRuns.get(request.params.id);
-  if (!run) {
-    response.status(404).json({ error: 'No se encontró esa ejecución.' });
-    return;
-  }
-  response.json({ run: publicPlannerRun(run) });
-});
-
-app.delete('/api/planner/runs/:id', (request, response) => {
-  const run = plannerRuns.get(request.params.id);
-  if (!run) {
-    response.status(404).json({ error: 'No se encontró esa ejecución.' });
-    return;
-  }
-  if (run.status === 'running') run.cancelRequested = true;
-  response.json({ run: publicPlannerRun(run) });
-});
+app.use('/api', createApiRouter(platform));
+app.use(express.json({ limit: '30kb' }));
 
 async function getHistory() {
   try {
@@ -238,6 +147,14 @@ app.use((error, _request, response, _next) => {
   response.status(500).json({ error: 'Error interno del panel de QA.' });
 });
 
-app.listen(port, '127.0.0.1', () => {
-  console.log(`API de QA disponible en http://127.0.0.1:${port}`);
+const server = app.listen(port, '127.0.0.1', () => {
+  console.log(`API de QA disponible en http://127.0.0.1:${port} (workspace: ${platform.config.workspace})`);
 });
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, async () => {
+    await platform.runs.shutdown();
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 2_000).unref();
+  });
+}

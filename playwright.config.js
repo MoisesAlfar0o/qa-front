@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const port = Number(process.env.PORT ?? 4173);
+
 export default defineConfig({
   testDir: './tests',
   fullyParallel: true,
@@ -11,14 +13,14 @@ export default defineConfig({
     ['html', { outputFolder: 'playwright-report', open: 'never' }],
   ],
   use: {
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL: `http://127.0.0.1:${port}`,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     ...devices['Desktop Chrome'],
   },
   webServer: {
-    command: 'npm run dev',
-    url: 'http://127.0.0.1:4173',
+    command: 'node scripts/start-dev.mjs',
+    url: `http://127.0.0.1:${port}`,
     reuseExistingServer: !process.env.CI,
     timeout: 30_000,
   },
