@@ -63,3 +63,37 @@ Los proyectos, inventarios, planes, escenarios, versiones, aprobaciones, eventos
 - El almacenamiento serializa escrituras dentro de un proceso. No se debe compartir un mismo workspace entre varias instancias servidor concurrentes.
 - La API local no incorpora autenticación de usuarios. Mantén el servidor en una máquina confiable y limita explícitamente los hosts objetivo.
 - `npm test -- tests/integration/platform-e2e.spec.ts` comprueba un flujo de edición de registro en `/lab`: exploración, resolución de elementos observados, generación del `.feature`, aprobación con dry-run de Cucumber, modificación verificada con Playwright y recuperación por SSE de estado, historial, captura, traza y reportes. El test usa un proveedor de plan controlado; no pretende verificar que Ollama esté instalado o disponible. La disponibilidad real de Ollama/MCP debe comprobarse en el entorno que vaya a usar la plataforma.
+
+
+
+Actúa como un Principal Software Engineer y Arquitecto Full-Stack. Estoy en un repositorio de automatización E2E con Playwright y playwright-bdd. Actualmente tengo las carpetas `features/` (Gherkin en español) y `steps/` (TypeScript), pero NO tengo ninguna plataforma web construida todavía.
+
+Tu objetivo es construir desde cero una plataforma web local de orquestación E2E bajo una nueva carpeta `/app`.
+
+### 1. REGLAS ARQUITECTÓNICAS (Inquebrantables)
+1. **Zero-DB:** Todo el historial, configuración y estados se guardan en archivos locales (ej. `app/data/`, `test-results/`).
+2. **Gestor de paquetes:** Usa exclusivamente `pnpm`. La plataforma web debe tener su propio `package.json` dentro de `/app` (React 18, Vite 5, Express 5).
+3. **Playwright Web-First:** El código de Playwright autogenerado debe usar aserciones web-first (`expect().toBeVisible()`). Prohibido usar `waitForTimeout` o selectores XPath.
+4. **ADR 0002 (Seguridad):** El inicio de sesión en la app E2E es estrictamente manual (MFA). El estado de autenticación ya reside en `test-results/.auth/user.json`. La plataforma web NUNCA debe intentar iniciar sesión.
+
+### 2. QUÉ DEBES CONSTRUIR EN `/app`
+
+Diseña e implementa la arquitectura completa dividida en estos módulos:
+
+#### A. Backend (Express 5 + Node.js nativo)
+1. **API y Orquestador (`server.js` y `jobs.js`):** Crea un servidor Express que lea los archivos `.feature` del repositorio padre. Implementa una cola de trabajos que ejecute `pnpm bddgen` y `playwright test` mediante `child_process`.
+2. **Persistencia y Control de Versiones:** Crea un sistema que encripte en un hash SHA-256 el contenido del `.feature` junto con todos los archivos de `steps/`. Esto validará si la implementación sufrió deriva (`IMPLEMENTATION_DRIFT`).
+3. **Streaming SSE:** Envía los logs de ejecución en tiempo real al frontend mediante Server-Sent Events.
+
+#### B. Frontend (React 18 + Vite)
+1. **Interfaz (`App.jsx`):** Construye un panel donde pueda ver los features, aprobar sus versiones y ejecutarlos.
+2. **Consola Fluida (Throttle):** La consola que reciba los eventos SSE debe usar un "throttle" (acumulación por lotes con `useRef`) para actualizar el DOM máximo cada 150ms. Esto evitará que React se congele con los logs de Playwright. Debe incluir scroll-lock matemático inteligente.
+
+#### C. Agente Autónomo Generador (`agent-runner.js`)
+1. Cuando un usuario intente ejecutar un feature que tiene pasos sin programar (Gherkin sin su step definition en TypeScript), el backend debe interceptarlo.
+2. Crea un módulo que orqueste un LLM (mediante una API genérica u Ollama) para que asuma el rol de creador de pasos.
+3. El agente debe abrir Chromium en segundo plano (`playwright-core` con `headless: false`), inyectar la sesión de `.auth/user.json` y navegar por el BackOffice para extraer los selectores web-first correctos.
+4. Debe escribir el código en TypeScript (`Given/When/Then`) e insertarlo en `steps/common.steps.ts`.
+
+### 3. INSTRUCCIONES DE EJECUCIÓN
+Por favor, analiza este requerimiento y dame un plan paso a paso detallado de cómo vas a estructurar los archivos dentro de la nueva carpeta `/app`. Una vez me des la estructura, te pediré que generes el código de cada módulo uno por uno para asegurar la calidad.
