@@ -1,99 +1,121 @@
-# Plataforma de automatización E2E
+# ROL
+Actúa como Principal Software Engineer full-stack con experiencia en Node.js, React, Playwright y herramientas de orquestación de agentes de IA. Trabajas dentro del repo `lafiservicios-frontend-qa-automation`. Tu trabajo es terminar, probar y pulir la plataforma web local de orquestación E2E que vive en `/app`, hasta dejarla lista para uso profesional por personas técnicas y por QA/negocio.
 
-## Flujo de trabajo
+# PASO 0: LEE ANTES DE TOCAR NADA
+Lee completos: `CLAUDE.md` (o `AGENTS.md`), `README.md`, `docs/workflow.md`, `docs/getting-started.md`, todos los ADR de `docs/adr/` (0001 a 0004), `.claude/commands/new-test.md`, `.claude/agents/*.md`, `playwright.config.ts`, `steps/fixtures.ts`, `steps/common.steps.ts` y la carpeta `app/` entera.
 
-La interfaz de la plataforma está en `/planner`; la aplicación local de prueba está en `/lab`. El flujo es:
+# QUÉ ES LA PLATAFORMA (estado actual)
+Una app local (React 18 + Vite 5 + Express 5, pnpm, Zero-DB) que es la cara gráfica del flujo `/new-test`. No reimplementa el agente: lanza uno externo (Claude Code o Cursor CLI) en modo no interactivo.
 
-1. Crear un proyecto indicando su URL inicial. Por defecto, solo se aceptan hosts loopback. Para autorizar un host de pruebas adicional, el operador inicia el servidor con `QA_ALLOWED_HOSTS=host1,host2`.
-2. Explorar el proyecto. Playwright recorre la URL inicial y las rutas observables; si `QA_MCP_ENABLED` está activo y el servidor MCP está disponible, también intenta obtener evidencia por Playwright MCP. El inventario y el mapa de navegación se guardan en el workspace.
-3. Describir el escenario en lenguaje libre o con los campos estructurados. Ollama propone un objeto JSON sujeto a JSON Schema. El servidor vuelve a validarlo, lo resuelve contra el catálogo y la evidencia observada y conserva el plan.
-4. Revisar el `.feature` generado, validarlo o guardarlo como una nueva versión inmutable. El generador usa exclusivamente pasos del catálogo; no ejecuta texto ni código producido por el modelo.
-5. Aprobar una versión concreta. La aprobación comprueba el hash, la validación actual, el riesgo y un dry-run real de Cucumber.js.
-6. Ejecutar solo la versión aprobada. Cucumber.js carga las definiciones TypeScript y Playwright realiza las acciones en el navegador. Los eventos persistidos se envían por SSE a la consola; el resultado y sus evidencias quedan disponibles en el historial.
+Flujo esperado por feature:
+1. Borrador: formulario (área, dónde, qué haces, qué debe pasar) -> el agente escribe SOLO el `.feature` en `features/<área>/`.
+2. Revisión: la persona edita el `.feature` en la app y pulsa Aprobar (se guarda el SHA-256 en `app/data/approvals.json`).
+3. Generar steps: el agente implementa los step definitions en `steps/` usando el MCP de Playwright con la sesión ya iniciada.
+4. Ejecutar: `pnpm bddgen` + Playwright (todo el feature o un escenario). Si pasa el feature completo, se guarda el hash de `.feature` + `steps/**` y queda VERIFIED. Si los steps cambian después, el estado pasa a IMPLEMENTATION_DRIFT.
 
-## Responsabilidades implementadas
+Archivos: `app/server/{server.js,jobs.js,lib.js,agent-runner.js}`, `app/src/{App.jsx,main.jsx,styles.css}`, `app/data/{approvals.json,config.json,runs/}`.
+Estados de feature: NOT_APPROVED, CHANGED, APPROVED, VERIFIED, IMPLEMENTATION_DRIFT. Estados de job: QUEUED, RUNNING, DONE, FAILED, CANCELLED, AUTH_REQUIRED.
 
-- `src/platform-app.jsx` conserva la consola y el diseño existentes y consume la API de la plataforma.
-- `platform/planner.ts`, `platform/resolver.ts` y `platform/plan.ts` separan la interpretación del proveedor, la validación estructural y la resolución determinista.
-- `platform/catalog.ts` define las acciones, los localizadores admitidos y las expresiones de pasos.
-- `platform/gherkin.ts` genera y valida Gherkin; `platform/scenarios.ts` gestiona versiones, hashes, dry-run y aprobación.
-- `runner/` ejecuta Cucumber.js y Playwright en un proceso hijo controlado.
-- `platform/runs.ts`, `platform/run-events.ts` y `platform/run-state.ts` registran y reducen los eventos que consume la consola.
-- `platform/store.ts` persiste en archivos locales, sin base de datos.
+# REGLAS INQUEBRANTABLES
+1. ADR 0002: la app NUNCA inicia sesión, ni ejecuta `pnpm auth:manual`, ni escribe credenciales. Si la sesión falta o expiró, solo avisa a la persona (mensajes "No hay una sesión guardada" / "La sesión guardada expiró").
+2. Solo `pnpm`. Zero-DB: todo estado en archivos locales.
+3. Windows y macOS: nada específico de un SO sin alternativa. Playwright se lanza con `node node_modules/@playwright/test/cli.js` (ADR 0004), nunca `cmd /c` ni `npx`.
+4. Sin shell para nada que contenga texto del usuario. El prompt del usuario va a un archivo; al agente solo se le pasa una instrucción fija.
+5. Código de Playwright generado: aserciones web-first con `expect`; prohibido `waitForTimeout`, `networkidle` y XPath; selectores `getByRole > getByLabel > getByPlaceholder > getByText > getByTestId`.
+6. Solo flujos de lectura (el usuario es personal, ver ADR 0002). Sin datos reales ni credenciales en ningún archivo.
+7. No hagas commit ni push. No edites `.features-gen/`. No cambies `.claude/agents/` ni `.claude/commands/` salvo que lo pida una tarea de abajo (esos cambios van por PR).
+8. No afirmes que algo funciona si no lo ejecutaste. Al final separa claramente "verificado ejecutándolo" de "no verificado".
 
-## API principal
+# LO QUE NO ESTÁ VERIFICADO (compruébalo primero y corrígelo)
+- Los flags del agente en `app/data/config.json`: `claude -p` y `cursor-agent -p`. Confirma contra la documentación oficial y contra la versión instalada. Averigua qué permisos/flags necesita cada herramienta para usar el MCP y editar archivos sin pedir confirmación, y déjalo configurable.
+- Que el agente de Cursor realmente use `.cursor/mcp.json` con el servidor `playwright-test` (comando: `node node_modules/@playwright/test/cli.js run-test-mcp-server`). Crea ese archivo y `AGENTS.md` si faltan.
+- Que `pnpm install` en `app/` funcione sin interferir con el `package.json` y el lockfile de la raíz (revisa si hay `pnpm-workspace.yaml`).
+- El formato real de la salida de `pnpm bddgen` cuando faltan steps.
+- Que la carpeta de salida del reporte HTML sea `playwright-report` y que el enlace "Reporte HTML" funcione (en dev vía el proxy de Vite y en producción).
+- El quoting de argumentos en Windows (shell:true solo para `pnpm` y el agente).
+- Que SSE funcione a través del proxy de Vite sin buffering.
 
-Las rutas están montadas bajo `/api`:
+# TAREAS (en este orden; termina y verifica cada fase antes de pasar a la siguiente)
 
-| Operación | Ruta |
-| --- | --- |
-| Estado del proveedor y MCP | `GET /planner/status` |
-| Crear y listar proyectos | `POST /projects`, `GET /projects` |
-| Explorar y consultar inventario | `POST /projects/:pid/explore`, `GET /projects/:pid/inventory` |
-| Crear un plan | `POST /projects/:pid/plans` |
-| Crear/editar y validar escenarios | `POST /projects/:pid/scenarios`, `POST /projects/:pid/scenarios/:sid/versions`, `POST /projects/:pid/validate` |
-| Aprobar una versión | `POST /projects/:pid/scenarios/:sid/versions/:version/approve` |
-| Iniciar y consultar ejecuciones | `POST /projects/:pid/runs`, `GET /projects/:pid/runs/:rid` |
-| Eventos y artefactos | `GET /projects/:pid/runs/:rid/events`, `GET /projects/:pid/runs/:rid/artifacts/*file` |
+## Fase 1. Que arranque
+`pnpm install` y `pnpm dev` dentro de `app/`; `pnpm build` y `pnpm start` (Express sirviendo `dist/`). Corrige lo que falle. Añade un script `check` que corra lint y tests, y un `README.md` en `app/` con requisitos, arranque, configuración del agente y solución de problemas.
 
-La aprobación se liga al hash exacto de una versión. Editar un escenario crea una versión distinta y no cambia bytes previamente aprobados. Los identificadores `requestId` permiten hacer idempotente la solicitud de ejecución.
+## Fase 2. Adaptador del agente
+Haz que el agente sea intercambiable y configurable en `app/data/config.json` (claude, cursor, y un agente `fake` para pruebas: un script Node que imprime líneas, crea un `.feature` de ejemplo, y puede simular fallo, sesión expirada y salida lenta). Valida la configuración al arrancar y muestra en la UI un error claro si el comando no existe. Permite definir un timeout por job.
 
-## Configuración y persistencia
+## Fase 3. Funcionalidad que falta o es frágil
+a. Al arrancar el servidor, marcar como FAILED los jobs que quedaron en RUNNING/QUEUED (la cola vive en memoria).
+b. Guardrail de código generado (`guards`): tras un job `implement`, analiza los `steps/**/*.ts` cambiados y avisa en la UI si contienen `waitForTimeout`, `networkidle`, XPath (`//`, `xpath=`), credenciales, o `.nth()` sin justificación. No borres nada: marca el job con advertencias visibles.
+c. Detección de pasos faltantes: antes de "Generar steps", ejecuta `pnpm bddgen` (según su formato real), muestra en la UI cuántas frases faltan y cuáles, y deshabilita el botón si no falta ninguna.
+d. Vista de cambios (git): hoy `git diff` no muestra archivos nuevos sin seguimiento. Muestra también su contenido, con un tope de tamaño.
+e. Cola: cancelación fiable en ambos SO (árbol de procesos), límite de líneas de log por job, rotación del historial.
+f. Mensajes de error claros y accionables para: sesión ausente/expirada, agente no instalado, `bddgen` fallido, feature modificado, deriva de implementación.
+g. Seguridad local: escucha solo en 127.0.0.1, validación de origen, además exige un encabezado personalizado en las peticiones que modifican estado. Revisa path traversal y que ningún texto de usuario llegue a un shell.
 
-| Variable | Valor predeterminado | Uso |
-| --- | --- | --- |
-| `QA_WORKSPACE` | `workspace/` | Raíz de datos locales persistentes. |
-| `OLLAMA_URL` / `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Servicio Ollama local. |
-| `OLLAMA_MODEL` | `qwen2.5:3b` | Modelo del planner. |
-| `OLLAMA_TIMEOUT_MS` | `120000` | Límite de espera por respuesta. |
-| `OLLAMA_MAX_ATTEMPTS` | `3` | Intentos acotados para obtener una respuesta válida. |
-| `QA_MCP_ENABLED` | activado | Usa `0` para deshabilitar Playwright MCP. |
-| `QA_ALLOWED_HOSTS` | vacío | Hosts adicionales autorizados por quien inicia el servidor. |
-| `QA_ALLOW_PRODUCTION` | desactivado | Debe ser `1` para permitir crear proyectos marcados como producción; en producción solo se permiten escenarios de lectura. |
-| `QA_RUN_TIMEOUT_MS` | `300000` | Tiempo máximo de una ejecución. |
-| `QA_MAX_CONCURRENT_RUNS` | `2` | Máximo de ejecuciones concurrentes. |
-| `QA_RUN_RETENTION` | `50` | Retención de evidencia completa. |
+## Fase 4. Pruebas automatizadas (usa Node test runner o Vitest; sin dependencias innecesarias)
+- Unitarias: hashing SHA-256 determinista (mismo resultado con CRLF/LF y con distinto orden de archivos), `statusOf` para todos los estados, validación de rutas y de áreas, parseo de escenarios y títulos.
+- Integración del backend con el agente `fake`: crear job, streaming SSE con replay por `Last-Event-ID`, cancelación, cola de uno en uno, AUTH_REQUIRED, aprobación y transición a VERIFIED y a IMPLEMENTATION_DRIFT, arranque con jobs huérfanos.
+- E2E de la propia UI con Playwright (web-first, sin `waitForTimeout`): flujo completo con el agente `fake`: crear borrador -> aparece y se abre -> editar y guardar -> aprobar -> generar steps -> ejecutar -> VERIFIED; área nueva; ejecutar un solo escenario; historial tras reiniciar el servidor; botón "Ir al final" del scroll-lock; throttle de la consola con 20.000 líneas sin congelar la UI.
 
-Los proyectos, inventarios, planes, escenarios, versiones, aprobaciones, eventos y resultados viven bajo el workspace. Los reportes, trazas, capturas y logs se guardan dentro de la ejecución correspondiente. El estado autenticado, si ya se dispone de él, se espera en `projects/<project-id>/auth/storage-state.json`.
+## Fase 5. Diseño y UX (calidad profesional)
+Mejora el diseño sin perder estas decisiones: pieza central = la línea de avance de 4 etapas del feature; panel inferior con Consola e Historial; barra lateral con features y su estado.
+- Diseña con intención: paleta y tipografía propias de una herramienta de QA bancaria, evita el look genérico de plantilla (tarjetas idénticas, degradados, etiquetas en mayúsculas, acentos por defecto). Define tokens (color, tipo, espaciado) en CSS variables.
+- Estados vacíos y de error que digan qué hacer. Textos en español, voz activa, el mismo nombre para la misma acción en todo el flujo.
+- Accesibilidad: foco visible, navegación por teclado, contraste AA en claro y oscuro, `prefers-reduced-motion`, roles ARIA correctos en pestañas y consola.
+- Responsive hasta móvil. Revisa tu propio trabajo con capturas de pantalla en claro y oscuro, y escritorio y móvil, antes de darlo por terminado.
+- Editor del `.feature`: resaltado simple de palabras clave de Gherkin (`Característica`, `Escenario`, `Dado`, `Cuando`, `Entonces`, `Y`, etiquetas) y aviso si falta `# language: es`. Sin añadir librerías pesadas.
 
-## Límites conocidos
+## Fase 6. Prueba de punta a punta con el agente REAL
+Con una sesión válida (`pnpm auth:manual`, que la ejecuta la persona, no tú), ejecuta el flujo completo con una prueba de solo lectura en `services`: borrador -> aprobar -> generar steps -> ejecutar -> VERIFIED. Prueba también la ruta de sesión expirada (renombrando temporalmente `test-results/.auth/user.json`) y restáurala. Documenta cualquier ajuste necesario en los flags, permisos o prompts (`app/server/agent-runner.js`). Si hay que cambiar los agentes de `.claude/`, propónlo como diff sin aplicarlo.
 
-- Ollama y Playwright MCP dependen de servicios locales y su disponibilidad se refleja en el estado y en la evidencia de exploración. La exploración directa con Playwright no requiere MCP.
-- La interfaz actual permite configurar el modo `storage-state`, pero no cargar desde ella un archivo de autenticación; debe colocarse en la ruta del workspace indicada arriba.
-- El almacenamiento serializa escrituras dentro de un proceso. No se debe compartir un mismo workspace entre varias instancias servidor concurrentes.
-- La API local no incorpora autenticación de usuarios. Mantén el servidor en una máquina confiable y limita explícitamente los hosts objetivo.
-- `npm test -- tests/integration/platform-e2e.spec.ts` comprueba un flujo de edición de registro en `/lab`: exploración, resolución de elementos observados, generación del `.feature`, aprobación con dry-run de Cucumber, modificación verificada con Playwright y recuperación por SSE de estado, historial, captura, traza y reportes. El test usa un proveedor de plan controlado; no pretende verificar que Ollama esté instalado o disponible. La disponibilidad real de Ollama/MCP debe comprobarse en el entorno que vaya a usar la plataforma.
+## Fase 7. Documentación
+`app/README.md` completo y un ADR `docs/adr/0005-e2e-orchestrator-app.md` (estado: propuesta) con contexto, decisión (app local + agente externo, Zero-DB, hash de deriva), consecuencias y alternativas descartadas (navegador embebido). Actualiza el índice de `docs/adr/README.md`.
+
+# CRITERIOS DE ACEPTACIÓN
+- `pnpm install && pnpm dev` funciona en Windows y macOS (indica en cuál lo probaste de verdad).
+- Todas las pruebas de la Fase 4 pasan y se ejecutan con un solo comando.
+- El flujo completo de la Fase 6 funciona con el agente real, o queda documentado exactamente qué falla y por qué.
+- Ninguna ruta de código intenta iniciar sesión ni escribir credenciales.
+- Sin `waitForTimeout`, `networkidle` ni XPath en ningún código nuevo, ni en el de la app ni en el generado.
+
+# FORMATO DE ENTREGA
+1. Resumen de lo hecho por fase.
+2. Lista "verificado ejecutándolo" vs "no verificado".
+3. Cambios que requieren decisión humana o un PR aparte (por ejemplo, cambios en `.claude/`).
+4. Problemas encontrados que no resolviste, con su causa probable.
+No hagas commit ni push.
 
 
 
-Actúa como un Principal Software Engineer y Arquitecto Full-Stack. Estoy en un repositorio de automatización E2E con Playwright y playwright-bdd. Actualmente tengo las carpetas `features/` (Gherkin en español) y `steps/` (TypeScript), pero NO tengo ninguna plataforma web construida todavía.
+## Fase 8 (OPCIONAL: solo si la persona lo pide explícitamente). Navegador visible dentro del front
 
-Tu objetivo es construir desde cero una plataforma web local de orquestación E2E bajo una nueva carpeta `/app`.
+Objetivo: mientras corre un job que usa navegador (ejecución de Playwright y, si es viable, generación de steps con el MCP), la UI muestra en vivo lo que ocurre en Chromium, en un panel dentro de la página. Hoy la ventana de Chromium solo se ve en la máquina local.
 
-### 1. REGLAS ARQUITECTÓNICAS (Inquebrantables)
-1. **Zero-DB:** Todo el historial, configuración y estados se guardan en archivos locales (ej. `app/data/`, `test-results/`).
-2. **Gestor de paquetes:** Usa exclusivamente `pnpm`. La plataforma web debe tener su propio `package.json` dentro de `/app` (React 18, Vite 5, Express 5).
-3. **Playwright Web-First:** El código de Playwright autogenerado debe usar aserciones web-first (`expect().toBeVisible()`). Prohibido usar `waitForTimeout` o selectores XPath.
-4. **ADR 0002 (Seguridad):** El inicio de sesión en la app E2E es estrictamente manual (MFA). El estado de autenticación ya reside en `test-results/.auth/user.json`. La plataforma web NUNCA debe intentar iniciar sesión.
+### Reglas específicas
+1. ADR 0002: el visor es SOLO LECTURA. No reenvíes clics, teclado ni foco desde la página al navegador. Así nadie puede escribir credenciales a través de la app, y la app sigue sin iniciar sesión jamás.
+2. El puerto de depuración (CDP) se abre solo mientras corre un job, en 127.0.0.1, con puerto aleatorio libre. Nunca se expone a la red ni se deja abierto al terminar.
+3. No toques `playwright.config.ts` sin avisar. Si hace falta un cambio mínimo (por ejemplo, pasar `--remote-debugging-port` leyendo una variable de entorno solo cuando esté definida), entrégalo como diff propuesto para un PR y haz que la app funcione sin él (el visor se desactiva con un aviso claro).
+4. El visor no puede bloquear ni ralentizar la cola ni la ejecución. Si falla, el job continúa y la UI muestra "Vista en vivo no disponible: <motivo>".
 
-### 2. QUÉ DEBES CONSTRUIR EN `/app`
+### Diseño sugerido (verifica contra la documentación oficial antes de implementar)
+- Backend: un módulo `app/server/screencast.js` que, cuando el job de ejecución arranque Chromium con el puerto CDP, se conecte por CDP (por ejemplo con `Page.startScreencast`, o con `chromium.connectOverCDP` de playwright-core) y reenvíe frames JPEG a la UI por SSE o WebSocket.
+- Limita a unos 8-10 fps, calidad JPEG moderada y tamaño máximo; descarta frames si el cliente va lento (backpressure). Un solo visor activo por job.
+- Frontend: un componente `LiveBrowser` en el panel inferior (nueva pestaña "Navegador") que dibuja los frames en un `<canvas>` o `<img>`, con estado (conectando, en vivo, finalizado, no disponible) y un botón para pausar. Cuida accesibilidad (texto alternativo, no depende solo del color) y que se vea bien en claro y oscuro.
+- Al terminar el job, conserva el último frame y ofrece el reporte HTML o la traza como alternativa para revisar después.
 
-Diseña e implementa la arquitectura completa dividida en estos módulos:
+### Qué averiguar primero (no lo des por hecho)
+- Si el MCP de Playwright que usa el agente permite exponer su navegador por CDP. Si no es viable, limita el visor a las ejecuciones de Playwright y documéntalo.
+- Si el modo headless de Chromium también permite screencast por CDP (debería), de modo que el visor funcione aunque `PLAYWRIGHT_HEADLESS=true`.
+- Alternativas para comparar y descartar con argumentos: modo UI de Playwright incrustado, video/traza solo post-ejecución, o un visor remoto tipo VNC. Documéntalas en el ADR.
 
-#### A. Backend (Express 5 + Node.js nativo)
-1. **API y Orquestador (`server.js` y `jobs.js`):** Crea un servidor Express que lea los archivos `.feature` del repositorio padre. Implementa una cola de trabajos que ejecute `pnpm bddgen` y `playwright test` mediante `child_process`.
-2. **Persistencia y Control de Versiones:** Crea un sistema que encripte en un hash SHA-256 el contenido del `.feature` junto con todos los archivos de `steps/`. Esto validará si la implementación sufrió deriva (`IMPLEMENTATION_DRIFT`).
-3. **Streaming SSE:** Envía los logs de ejecución en tiempo real al frontend mediante Server-Sent Events.
+### Pruebas
+- Unitarias y de integración con un origen de frames falso (sin Chromium real): arranque y parada, descarte de frames bajo carga, desconexión del cliente, cierre del puerto al terminar el job.
+- E2E de la UI con el origen falso: el panel pasa de "conectando" a "en vivo" y a "finalizado", y muestra el mensaje de no disponible cuando falla.
+- Prueba manual con Chromium real durante una ejecución, en Windows y macOS (indica en cuál lo probaste).
 
-#### B. Frontend (React 18 + Vite)
-1. **Interfaz (`App.jsx`):** Construye un panel donde pueda ver los features, aprobar sus versiones y ejecutarlos.
-2. **Consola Fluida (Throttle):** La consola que reciba los eventos SSE debe usar un "throttle" (acumulación por lotes con `useRef`) para actualizar el DOM máximo cada 150ms. Esto evitará que React se congele con los logs de Playwright. Debe incluir scroll-lock matemático inteligente.
-
-#### C. Agente Autónomo Generador (`agent-runner.js`)
-1. Cuando un usuario intente ejecutar un feature que tiene pasos sin programar (Gherkin sin su step definition en TypeScript), el backend debe interceptarlo.
-2. Crea un módulo que orqueste un LLM (mediante una API genérica u Ollama) para que asuma el rol de creador de pasos.
-3. El agente debe abrir Chromium en segundo plano (`playwright-core` con `headless: false`), inyectar la sesión de `.auth/user.json` y navegar por el BackOffice para extraer los selectores web-first correctos.
-4. Debe escribir el código en TypeScript (`Given/When/Then`) e insertarlo en `steps/common.steps.ts`.
-
-### 3. INSTRUCCIONES DE EJECUCIÓN
-Por favor, analiza este requerimiento y dame un plan paso a paso detallado de cómo vas a estructurar los archivos dentro de la nueva carpeta `/app`. Una vez me des la estructura, te pediré que generes el código de cada módulo uno por uno para asegurar la calidad.
+### Criterios de aceptación de esta fase
+- Durante una ejecución real se ven frames en la pestaña "Navegador" con latencia razonable.
+- Ninguna interacción de la página llega al navegador (verifícalo con una prueba).
+- El puerto CDP queda cerrado al terminar o cancelar el job, y solo escuchó en 127.0.0.1.
+- Si algo falla, la ejecución sigue y la UI lo explica.
+- Actualiza el ADR 0005 y `app/README.md` con esta decisión.
